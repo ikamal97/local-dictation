@@ -48,7 +48,40 @@ final class AudioCapture {
             Log.info("audio: engine configuration changed, restarting")
             self?.restart()
         }
+        watchDevices()
         try startEngine()
+    }
+
+    private var pendingDeviceRestart: DispatchWorkItem?
+
+    /// AVAudioEngine doesn't always post a configuration change when devices come and go
+    /// (connecting AirPods left the pinned built-in mic delivering silence), so restart
+    /// whenever the device list or system default devices change.
+    private func watchDevices() {
+        let selectors = [
+            kAudioHardwarePropertyDevices,
+            kAudioHardwarePropertyDefaultInputDevice,
+            kAudioHardwarePropertyDefaultOutputDevice,
+        ]
+        for selector in selectors {
+            var address = AudioObjectPropertyAddress(
+                mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main) { [weak self] _, _ in
+                self?.scheduleDeviceRestart()
+            }
+        }
+    }
+
+    /// Devices fire several notifications as they connect; restart once they settle.
+    private func scheduleDeviceRestart() {
+        pendingDeviceRestart?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            Log.info("audio: devices changed, restarting")
+            self?.restart()
+        }
+        pendingDeviceRestart = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
     func restart() {

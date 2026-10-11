@@ -93,8 +93,9 @@ final class Dictation {
         guard to - from > Int(0.2 * AudioCapture.sampleRate) else { return }
         let samples = audio.slice(from: from, to: to)
         // Speech models hallucinate on silence ("Thank you."), so skip segments with no speech.
-        guard Self.loudestFrame(samples, frame: frame) > 0.005 else {
-            Log.info("segment skipped: silence")
+        let peak = Self.loudestFrame(samples, frame: frame)
+        guard peak > 0.005 else {
+            Log.info("segment skipped: silence (peak RMS \(String(format: "%.5f", peak)))")
             return
         }
         let previous = pipeline
