@@ -31,6 +31,11 @@ final class AudioCapture {
 
     private var configObserver: NSObjectProtocol?
 
+    /// Screencast mode: launching with LOCALDICTATION_DEMO_AUDIO=/path/to/speech.wav replaces
+    /// the microphone with that file, played in real time from the start of each take.
+    private let demoAudio = ProcessInfo.processInfo.environment["LOCALDICTATION_DEMO_AUDIO"].flatMap(AudioCapture.load)
+    private var demoTimer: DispatchSourceTimer?
+
     /// UID of the input device to use; nil means the built-in microphone.
     var preferredDeviceUID: String? {
         didSet { if oldValue != preferredDeviceUID { restart() } }
@@ -77,7 +82,7 @@ final class AudioCapture {
     }
 
     private func consume(_ buffer: AVAudioPCMBuffer) {
-        guard let converter else { return }
+        guard let converter, demoAudio == nil else { return }
         let ratio = outFormat.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 64
         guard let out = AVAudioPCMBuffer(pcmFormat: outFormat, frameCapacity: capacity) else { return }
@@ -115,6 +120,7 @@ final class AudioCapture {
         let end = base + samples.count
         let start = max(base, end - Int(preRollSeconds * Self.sampleRate))
         takeStart = start
+        if let demoAudio { playDemo(demoAudio) }
         return start
     }
 
@@ -133,8 +139,52 @@ final class AudioCapture {
     }
 
     func endTake() {
+        demoTimer?.cancel()
+        demoTimer = nil
         lock.lock(); defer { lock.unlock() }
         takeStart = nil
+    }
+
+    // MARK: - Demo audio
+
+    private func playDemo(_ audio: [Float]) {
+        let chunk = Int(Self.sampleRate / 50)  // 20 ms
+        var position = 0
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .userInitiated))
+        timer.schedule(deadline: .now(), repeating: .milliseconds(20))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            let end = min(position + chunk, audio.count)
+            var samples = position < end ? Array(audio[position..<end]) : []
+            samples += [Float](repeating: 0, count: chunk - samples.count)
+            position += chunk
+            let rms = (samples.reduce(0) { $0 + $1 * $1 } / Float(chunk)).squareRoot()
+            self.lock.lock()
+            self.samples.append(contentsOf: samples)
+            self.latestLevel = rms
+            self.lock.unlock()
+        }
+        demoTimer = timer
+        timer.resume()
+    }
+
+    private static func load(_ path: String) -> [Float]? {
+        guard let file = try? AVAudioFile(forReading: URL(fileURLWithPath: path)),
+              let input = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)),
+              (try? file.read(into: input)) != nil,
+              let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false),
+              let converter = AVAudioConverter(from: file.processingFormat, to: format),
+              let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(Double(file.length) * sampleRate / file.processingFormat.sampleRate) + 1024)
+        else { return nil }
+        var fed = false
+        converter.convert(to: output, error: nil) { _, status in
+            if fed { status.pointee = .endOfStream; return nil }
+            fed = true
+            status.pointee = .haveData
+            return input
+        }
+        Log.info("audio: demo mode, playing \(path) instead of the microphone")
+        return Array(UnsafeBufferPointer(start: output.floatChannelData![0], count: Int(output.frameLength)))
     }
 
     // MARK: - Device lookup

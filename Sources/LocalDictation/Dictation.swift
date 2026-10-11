@@ -54,6 +54,14 @@ final class Dictation {
         return parts.filter { !$0.isEmpty }.joined(separator: " ")
     }
 
+    private static func loudestFrame(_ samples: [Float], frame: Int) -> Float {
+        stride(from: 0, to: max(samples.count - frame + 1, 0), by: frame).map { i -> Float in
+            var sum: Float = 0
+            for s in samples[i..<i + frame] { sum += s * s }
+            return (sum / Float(frame)).squareRoot()
+        }.max() ?? 0
+    }
+
     private func cutAtPause() {
         let now = audio.currentIndex
         let minLen = Int(minSegmentSeconds * AudioCapture.sampleRate)
@@ -84,6 +92,11 @@ final class Dictation {
     private func enqueue(from: Int, to: Int) {
         guard to - from > Int(0.2 * AudioCapture.sampleRate) else { return }
         let samples = audio.slice(from: from, to: to)
+        // Speech models hallucinate on silence ("Thank you."), so skip segments with no speech.
+        guard Self.loudestFrame(samples, frame: frame) > 0.005 else {
+            Log.info("segment skipped: silence")
+            return
+        }
         let previous = pipeline
         let index = segmentCount
         segmentCount += 1

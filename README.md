@@ -35,11 +35,22 @@ pastes cleaned-up text about a quarter of a second after you let go.
 ## Demo
 
 <p align="center">
-  <img src="assets/screenshot-settings.png" width="640" alt="Local Dictation settings window">
+  <img src="assets/demo.gif" width="760" alt="Holding fn, speaking, and releasing inserts cleaned-up text into TextEdit">
 </p>
 
+<p align="center"><sub>
+  Spoken: <i>"So I think we should, um, ship the new onboarding flow on Friday. No wait, Thursday.
+  And let's make sure the release notes are ready before then."</i><br>
+  The filler word and the self-correction are cleaned up on device.
+</sub></p>
+
 While you dictate, a small pill at the bottom of the screen shows a live waveform; it
-switches to a spinner on release and confirms when the text is inserted.
+switches to a spinner on release and the text lands at the cursor. The app also has a
+window for history, a personal dictionary and settings:
+
+<p align="center">
+  <img src="assets/screenshot-settings.png" width="560" alt="Local Dictation settings window">
+</p>
 
 | Shortcut | Action |
 |---|---|
@@ -96,6 +107,15 @@ your own from your dictation history, see [`training/`](training/README.md).
 
 ```sh
 ./scripts/test.sh
+```
+
+### Recording a demo
+
+Launching with `LOCALDICTATION_DEMO_AUDIO=/path/to/speech.wav` feeds that file to the
+pipeline instead of the microphone, so screencasts are reproducible:
+
+```sh
+open --env LOCALDICTATION_DEMO_AUDIO=$PWD/speech.wav /Applications/LocalDictation.app
 ```
 
 ## Privacy
