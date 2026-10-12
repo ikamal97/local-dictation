@@ -340,7 +340,7 @@ private struct DictionaryView: View {
             } header: {
                 Text("Replacements")
             } footer: {
-                Text("Swap a word or phrase every time it's transcribed, e.g. a name the model mishears.")
+                Text("Swap a word or phrase every time it's transcribed, e.g. a name the model mishears. Words you fix right after dictating are added here automatically.")
             }
 
             SwiftUI.Section {
@@ -444,6 +444,10 @@ private struct SettingsView: View {
                 Toggle(isOn: $model.cleanupEnabled) {
                     Text("AI cleanup")
                     Text("Removes filler words, fixes punctuation and handles self-corrections, on this Mac.")
+                }
+                Toggle(isOn: $model.learnCorrections) {
+                    Text("Learn from my corrections")
+                    Text("When you fix a misheard word right after dictating, it's added to your dictionary.")
                 }
             }
 

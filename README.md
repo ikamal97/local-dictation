@@ -30,6 +30,8 @@ pastes cleaned-up text about a quarter of a second after you let go.
   background, so a two-minute dictation lands as fast as a two-second one.
 - **Context-aware.** Continues mid-sentence in lowercase, fixes spacing around the cursor,
   and corrects names it can see on screen.
+- **Learns from your fixes.** Correct a misheard word right after dictating ("Kubernetis" →
+  "Kubernetes") and the fix is added to your dictionary, so it's right next time.
 - **Native and small.** One Swift process with no Electron and no server, ~45 MB plus models.
 
 ## Demo
