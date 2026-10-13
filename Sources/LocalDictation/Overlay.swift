@@ -85,14 +85,47 @@ final class Overlay {
         })
     }
 
-    /// Bottom-center of the screen that has the mouse, just above the Dock.
+    /// Bottom-center of the screen the user is typing on, just above the Dock.
     private func position() {
-        let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
+        let screen = Self.frontmostWindowScreen() ?? Self.mouseScreen() ?? NSScreen.main
         guard let visible = screen?.visibleFrame else { return }
         let size = panel.frame.size
         panel.setFrameOrigin(NSPoint(x: visible.midX - size.width / 2, y: visible.minY + 28))
     }
+
+    /// Screen holding the frontmost app's topmost window. The mouse can sit on another
+    /// display (common with a full-screen app), so it is only a fallback.
+    private static func frontmostWindowScreen() -> NSScreen? {
+        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+              let primary = NSScreen.screens.first,
+              let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+                as? [[String: Any]]
+        else { return nil }
+
+        // The list is front-to-back; take the first normal-layer window owned by the app.
+        for info in windows {
+            guard info[kCGWindowOwnerPID as String] as? pid_t == pid,
+                  info[kCGWindowLayer as String] as? Int == 0,
+                  let dict = info[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: dict),
+                  bounds.width >= 100, bounds.height >= 100
+            else { continue }
+            // CG window bounds are top-left based on the primary display; flip to AppKit.
+            let rect = NSRect(x: bounds.minX, y: primary.frame.maxY - bounds.maxY,
+                              width: bounds.width, height: bounds.height)
+            return NSScreen.screens.max { a, b in
+                area(a.frame.intersection(rect)) < area(b.frame.intersection(rect))
+            }.flatMap { area($0.frame.intersection(rect)) > 0 ? $0 : nil }
+        }
+        return nil
+    }
+
+    private static func mouseScreen() -> NSScreen? {
+        let mouse = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
+    }
+
+    private static func area(_ r: NSRect) -> CGFloat { r.isNull ? 0 : r.width * r.height }
 
     private func startLevels() {
         guard levelTimer == nil else { return }
