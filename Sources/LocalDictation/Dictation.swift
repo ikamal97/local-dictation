@@ -11,10 +11,14 @@ final class Dictation {
     private let cleanupEnabled: Bool
 
     private let startIndex: Int
+    /// End of the pre-roll; audio past this index was recorded during the take.
+    private let liveIndex: Int
     /// Text around the cursor, filled in shortly after the take starts.
     var context = DictationContext()
     /// Length of the recorded audio, set when the take finishes.
     private(set) var audioSeconds = 0.0
+    /// True when the microphone delivered nothing during the take.
+    private(set) var noAudio = false
     private var committed: Int
     private var pipeline: Task<[String], Never>?
     private var segmentTimer: Timer?
@@ -31,6 +35,7 @@ final class Dictation {
         self.rules = rules
         self.cleanupEnabled = cleanupEnabled
         startIndex = audio.beginTake()
+        liveIndex = audio.currentIndex
         committed = startIndex
         segmentTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             self?.cutAtPause()
@@ -48,6 +53,13 @@ final class Dictation {
         segmentTimer?.invalidate()
         let end = audio.currentIndex
         audioSeconds = Double(end - startIndex) / AudioCapture.sampleRate
+        // Pre-roll alone is a stalled microphone, and the model would hallucinate on it ("Yeah.").
+        if end - liveIndex < Int(0.1 * AudioCapture.sampleRate) {
+            Log.info("dictation: no audio arrived from the microphone")
+            audio.endTake()
+            noAudio = true
+            return ""
+        }
         enqueue(from: committed, to: end)
         audio.endTake()
         let parts = await pipeline?.value ?? []

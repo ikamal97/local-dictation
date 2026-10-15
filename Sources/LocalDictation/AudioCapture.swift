@@ -22,6 +22,8 @@ final class AudioCapture {
     private var base = 0
     private var takeStart: Int?
     private var latestLevel: Float = 0
+    /// When the last microphone buffer arrived, to notice an engine that stopped delivering audio.
+    private var lastBufferAt = Date.distantPast
 
     /// RMS of the most recent audio buffer (0...1), for the level meter.
     var level: Float {
@@ -30,6 +32,7 @@ final class AudioCapture {
     }
 
     private var configObserver: NSObjectProtocol?
+    private var deviceListener: AudioObjectPropertyListenerBlock?
 
     /// Screencast mode: launching with LOCALDICTATION_DEMO_AUDIO=/path/to/speech.wav replaces
     /// the microphone with that file, played in real time from the start of each take.
@@ -48,6 +51,17 @@ final class AudioCapture {
             Log.info("audio: engine configuration changed, restarting")
             self?.restart()
         }
+        // Connecting AirPods can stall the engine without a configuration change notification,
+        // so restart whenever a device is added or removed.
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices, mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            Log.info("audio: device list changed, restarting")
+            self?.restart()
+        }
+        deviceListener = listener
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, listener)
         try startEngine()
     }
 
@@ -102,6 +116,7 @@ final class AudioCapture {
 
         lock.lock()
         latestLevel = rms
+        lastBufferAt = Date()
         samples.append(contentsOf: chunk)
         if takeStart == nil {
             let keep = Int(preRollSeconds * Self.sampleRate)
@@ -116,6 +131,13 @@ final class AudioCapture {
 
     /// Marks the start of a take, including pre-roll. Returns the absolute start index.
     func beginTake() -> Int {
+        lock.lock()
+        let stalled = demoAudio == nil && Date().timeIntervalSince(lastBufferAt) > 0.5
+        lock.unlock()
+        if stalled {
+            Log.info("audio: no buffers for \(String(format: "%.1f", Date().timeIntervalSince(lastBufferAt))) s, restarting")
+            restart()
+        }
         lock.lock(); defer { lock.unlock() }
         let end = base + samples.count
         let start = max(base, end - Int(preRollSeconds * Self.sampleRate))

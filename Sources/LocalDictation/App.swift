@@ -129,7 +129,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let transcript = await dictation.finish()
                 let text = self.rules.fit(transcript, to: dictation.context)
                 let latency = Int(nowMs() - releasedAt)
-                if text.trimmingCharacters(in: .whitespaces).isEmpty {
+                if dictation.noAudio {
+                    self.overlay.show(.message("No audio from the microphone"))
+                } else if text.trimmingCharacters(in: .whitespaces).isEmpty {
                     self.overlay.show(.message("Didn't catch that"))
                 } else {
                     Inserter.insert(text)
@@ -158,10 +160,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !lastTranscript.isEmpty else { return overlay.show(.message("No transcript yet")) }
         let transcript = lastTranscript
         DispatchQueue.global(qos: .userInitiated).async {
+            // The shortcut fires on key-down, with ⌃⌘ still held. A ⌘V posted now reaches the app
+            // as ⌃⌘V, which isn't Paste, so wait (up to 2 s) for the modifiers to come up.
+            let held: CGEventFlags = [.maskControl, .maskCommand, .maskAlternate, .maskShift]
+            let deadline = Date().addingTimeInterval(2)
+            while !CGEventSource.flagsState(.hidSystemState).intersection(held).isEmpty, Date() < deadline {
+                usleep(10_000)
+            }
             let ctx = ContextCapture.capture()
             DispatchQueue.main.async {
                 Inserter.insert(self.rules.fit(transcript, to: ctx))
                 self.overlay.show(.done("Pasted last transcript"))
+                Log.info("paste-last: pasted \(transcript.split(separator: " ").count) words")
             }
         }
     }
