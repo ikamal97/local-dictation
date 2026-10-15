@@ -13,6 +13,7 @@ final class AppModel: ObservableObject {
     @Published var cleanupEnabled: Bool { didSet { defaults.set(cleanupEnabled, forKey: "cleanupEnabled") } }
     @Published var startSound: Bool { didSet { defaults.set(startSound, forKey: "startSound") } }
     @Published var saveHistory: Bool { didSet { defaults.set(saveHistory, forKey: "saveHistory") } }
+    @Published var learnCorrections: Bool { didSet { defaults.set(learnCorrections, forKey: "learnCorrections") } }
     /// Empty string means the built-in microphone.
     @Published var inputDeviceUID: String { didSet { defaults.set(inputDeviceUID, forKey: "inputDeviceUID") } }
     @Published var launchAtLogin: Bool {
@@ -32,6 +33,7 @@ final class AppModel: ObservableObject {
         cleanupEnabled = defaults.object(forKey: "cleanupEnabled") as? Bool ?? true
         startSound = defaults.object(forKey: "startSound") as? Bool ?? true
         saveHistory = defaults.object(forKey: "saveHistory") as? Bool ?? true
+        learnCorrections = defaults.object(forKey: "learnCorrections") as? Bool ?? true
         inputDeviceUID = defaults.string(forKey: "inputDeviceUID") ?? ""
         launchAtLogin = SMAppService.mainApp.status == .enabled
     }
@@ -52,6 +54,15 @@ final class DictionaryStore: ObservableObject {
     private var loading = false
 
     init() { load() }
+
+    /// Adds a learned replacement, updating an existing one for the same phrase.
+    func learn(from: String, to: String) {
+        if let i = replacements.firstIndex(where: { $0.from.caseInsensitiveCompare(from) == .orderedSame }) {
+            replacements[i].to = to
+        } else {
+            replacements.append(.init(from: from, to: to))
+        }
+    }
 
     func load() {
         loading = true

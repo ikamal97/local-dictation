@@ -10,6 +10,7 @@ final class Overlay {
         case recording(handsFree: Bool)
         case processing
         case done(String)
+        case learned(String)
         case cancelled
         case message(String)
     }
@@ -54,6 +55,7 @@ final class Overlay {
 
         let linger: Double? = switch phase {
         case .done: 0.7
+        case .learned: 2.5
         case .cancelled: 0.8
         case .message: 4.0
         default: nil
@@ -195,6 +197,11 @@ private struct OverlayView: View {
         case .done(let text):
             HStack(spacing: 6) {
                 Image(systemName: "checkmark").foregroundStyle(.green)
+                label(text)
+            }
+        case .learned(let text):
+            HStack(spacing: 6) {
+                Image(systemName: "character.book.closed").foregroundStyle(.indigo)
                 label(text)
             }
         case .cancelled:

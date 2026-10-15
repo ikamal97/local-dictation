@@ -32,7 +32,6 @@ final class AudioCapture {
     }
 
     private var configObserver: NSObjectProtocol?
-    private var deviceListener: AudioObjectPropertyListenerBlock?
 
     /// Screencast mode: launching with LOCALDICTATION_DEMO_AUDIO=/path/to/speech.wav replaces
     /// the microphone with that file, played in real time from the start of each take.
@@ -51,18 +50,40 @@ final class AudioCapture {
             Log.info("audio: engine configuration changed, restarting")
             self?.restart()
         }
-        // Connecting AirPods can stall the engine without a configuration change notification,
-        // so restart whenever a device is added or removed.
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDevices, mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            Log.info("audio: device list changed, restarting")
+        watchDevices()
+        try startEngine()
+    }
+
+    private var pendingDeviceRestart: DispatchWorkItem?
+
+    /// AVAudioEngine doesn't always post a configuration change when devices come and go
+    /// (connecting AirPods left the pinned built-in mic delivering silence), so restart
+    /// whenever the device list or system default devices change.
+    private func watchDevices() {
+        let selectors = [
+            kAudioHardwarePropertyDevices,
+            kAudioHardwarePropertyDefaultInputDevice,
+            kAudioHardwarePropertyDefaultOutputDevice,
+        ]
+        for selector in selectors {
+            var address = AudioObjectPropertyAddress(
+                mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main) { [weak self] _, _ in
+                self?.scheduleDeviceRestart()
+            }
+        }
+    }
+
+    /// Devices fire several notifications as they connect; restart once they settle.
+    private func scheduleDeviceRestart() {
+        pendingDeviceRestart?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            Log.info("audio: devices changed, restarting")
             self?.restart()
         }
-        deviceListener = listener
-        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, listener)
-        try startEngine()
+        pendingDeviceRestart = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
     func restart() {

@@ -135,12 +135,12 @@ final class TextRules {
 
     // MARK: - Helpers
 
-    private static func isCommonWord(_ word: String) -> Bool {
+    static func isCommonWord(_ word: String) -> Bool {
         let lower = word.lowercased()
         return NSSpellChecker.shared.checkSpelling(of: lower, startingAt: 0).location == NSNotFound
     }
 
-    private static func soundex(_ word: String) -> String {
+    static func soundex(_ word: String) -> String {
         let codes: [Character: Character] = [
             "b": "1", "f": "1", "p": "1", "v": "1",
             "c": "2", "g": "2", "j": "2", "k": "2", "q": "2", "s": "2", "x": "2", "z": "2",
@@ -159,7 +159,7 @@ final class TextRules {
         return out.padding(toLength: 4, withPad: "0", startingAt: 0)
     }
 
-    private static func distance(_ a: String, _ b: String) -> Int {
+    static func distance(_ a: String, _ b: String) -> Int {
         let a = Array(a), b = Array(b)
         var row = Array(0...b.count)
         for i in 1...max(a.count, 1) where !a.isEmpty {

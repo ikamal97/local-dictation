@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var lastTranscript = (try? String(contentsOf: Paths.lastTranscript, encoding: .utf8)) ?? ""
     private let startSound = NSSound(named: "Tink")
     private var observers: Set<AnyCancellable> = []
+    private lazy var corrections = CorrectionWatcher { [weak self] learned in self?.learn(learned) }
 
     private var current: Dictation?
     private var keyDownAt = 0.0
@@ -90,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .start:
             guard model.isReady, current == nil else { return }
             keyDownAt = nowMs()
+            corrections.stop()
             let dictation = Dictation(audio: audio, transcriber: transcriber, cleaner: cleaner, rules: rules, cleanupEnabled: model.cleanupEnabled)
             current = dictation
             rules.reloadIfChanged()
@@ -136,6 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 } else {
                     Inserter.insert(text)
                     self.overlay.show(.done("Inserted"))
+                    if self.model.learnCorrections { self.corrections.watch(text) }
                     self.remember(transcript)
                     if self.model.saveHistory {
                         self.model.history.add(
@@ -149,6 +152,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - Learning from corrections
+
+    private func learn(_ learned: [Corrections.Correction]) {
+        for c in learned {
+            model.dictionary.learn(from: c.from, to: c.to)
+            Log.info("dictionary: learned \"\(c.from)\" → \"\(c.to)\"")
+        }
+        let names = learned.map { "“\($0.to)”" }.joined(separator: ", ")
+        overlay.show(.learned("Added \(names) to dictionary"))
+    }
+
     // MARK: - Last transcript
 
     private func remember(_ transcript: String) {
@@ -159,6 +173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func pasteLast() {
         guard !lastTranscript.isEmpty else { return overlay.show(.message("No transcript yet")) }
         let transcript = lastTranscript
+        corrections.stop()
         DispatchQueue.global(qos: .userInitiated).async {
             // The shortcut fires on key-down, with ⌃⌘ still held. A ⌘V posted now reaches the app
             // as ⌃⌘V, which isn't Paste, so wait (up to 2 s) for the modifiers to come up.
