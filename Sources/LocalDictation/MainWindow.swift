@@ -477,6 +477,11 @@ private struct SettingsView: View {
 
             SwiftUI.Section {
                 Toggle("Save dictation history", isOn: $model.saveHistory)
+                Toggle(isOn: $model.saveAudio) {
+                    Text("Save audio for accuracy testing")
+                    Text("Keeps each dictation's recording and raw transcript on this Mac for 30 days (up to 1 GB).")
+                }
+                .disabled(!model.saveHistory)
                 HStack {
                     Button(importing ? "Importing…" : (model.history.hasWisprImport ? "Re-import from Wispr Flow" : "Import from Wispr Flow")) {
                         importing = true

@@ -43,6 +43,23 @@ llama-server -m work/cleanup.gguf --port 8089 -ngl 99 &
 work/.venv-mlx/bin/python bench_cleanup.py
 ```
 
+### Benchmarking on your own dictations
+
+Turn on **Settings → Data → Save audio for accuracy testing**. Each take is then kept in
+`~/Library/Application Support/LocalDictation/recordings/` as `<history id>.wav` (16 kHz mono)
+and `<history id>.json` (Parakeet's raw text and sample range per segment, the cleaned and
+pasted text, latency). Recordings are deleted with their history entry, and after 30 days or
+once they pass 1 GB, oldest first.
+
+```sh
+python3 export_local.py --out work/local    # adds new takes; keeps clips and labels already exported
+# Fill in "reference" in work/local/bench/meta.json with what you actually said
+work/.venv-mlx/bin/python bench_asr.py --cli FluidAudio/.build/release/fluidaudiocli --work work/local
+```
+
+`bench_asr.py` scores only clips with a reference, and also reports the WER of the text the
+app produced at the time (`asr`, transcribed segment by segment).
+
 ## What I found
 
 On 130 held-out recordings (44 minutes), cleaning up Parakeet's transcripts of each

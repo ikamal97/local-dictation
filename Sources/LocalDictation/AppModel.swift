@@ -13,6 +13,7 @@ final class AppModel: ObservableObject {
     @Published var cleanupEnabled: Bool { didSet { defaults.set(cleanupEnabled, forKey: "cleanupEnabled") } }
     @Published var startSound: Bool { didSet { defaults.set(startSound, forKey: "startSound") } }
     @Published var saveHistory: Bool { didSet { defaults.set(saveHistory, forKey: "saveHistory") } }
+    @Published var saveAudio: Bool { didSet { defaults.set(saveAudio, forKey: "saveAudio") } }
     @Published var learnCorrections: Bool { didSet { defaults.set(learnCorrections, forKey: "learnCorrections") } }
     /// Empty string means the built-in microphone.
     @Published var inputDeviceUID: String { didSet { defaults.set(inputDeviceUID, forKey: "inputDeviceUID") } }
@@ -33,6 +34,7 @@ final class AppModel: ObservableObject {
         cleanupEnabled = defaults.object(forKey: "cleanupEnabled") as? Bool ?? true
         startSound = defaults.object(forKey: "startSound") as? Bool ?? true
         saveHistory = defaults.object(forKey: "saveHistory") as? Bool ?? true
+        saveAudio = defaults.bool(forKey: "saveAudio")
         learnCorrections = defaults.object(forKey: "learnCorrections") as? Bool ?? true
         inputDeviceUID = defaults.string(forKey: "inputDeviceUID") ?? ""
         launchAtLogin = SMAppService.mainApp.status == .enabled
