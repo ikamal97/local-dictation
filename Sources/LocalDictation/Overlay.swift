@@ -13,13 +13,18 @@ final class Overlay {
         case learned(String)
         case cancelled
         case message(String)
+
+        var isRecording: Bool { if case .recording = self { true } else { false } }
     }
 
     private let model = OverlayModel()
     private let panel: NSPanel
     private var levelTimer: Timer?
     private var hideWork: DispatchWorkItem?
+    private var checkWork: DispatchWorkItem?
     private let levelSource: () -> Float
+    /// Whether the pill should be on screen. Window alpha is mid-animation too often to say.
+    private var wantsVisible = false
 
     init(levelSource: @escaping () -> Float) {
         self.levelSource = levelSource
@@ -27,7 +32,8 @@ final class Overlay {
             contentRect: NSRect(x: 0, y: 0, width: 340, height: 64),
             styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: false)
         panel.isFloatingPanel = true
-        panel.level = .statusBar
+        // Above full-screen apps' toolbar windows (level 26), which sit over .statusBar.
+        panel.level = .screenSaver
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = false
@@ -36,6 +42,20 @@ final class Overlay {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.contentView = NSHostingView(rootView: OverlayView(model: model))
         panel.alphaValue = 0
+
+        // Space switches (entering or leaving a full-screen app) and display changes can
+        // drop the panel or leave it on the wrong screen; put it back while it is in use.
+        let workspace = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didActivateApplicationNotification] {
+            workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                MainActor.assumeIsolated { self?.reassert(note.name.rawValue) }
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reassert("screens changed") }
+        }
     }
 
     func show(_ phase: Phase) {
@@ -68,28 +88,72 @@ final class Overlay {
     }
 
     private func fadeIn() {
-        guard panel.alphaValue < 1 || !panel.isVisible else { return }
-        position()
+        let appearing = !wantsVisible
+        wantsVisible = true
+        // Re-place on every recording start too, so a pill left on another display moves over.
+        if appearing || model.phase.isRecording { position() }
+        // Always re-order: the panel can be off screen even when its alpha is already 1.
         panel.orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.12
-            panel.animator().alphaValue = 1
+        if panel.alphaValue < 1 {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.12
+                panel.animator().alphaValue = 1
+            }
         }
+        scheduleCheck()
     }
 
     private func fadeOut() {
+        wantsVisible = false
+        checkWork?.cancel()
         stopLevels()
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.2
             panel.animator().alphaValue = 0
-        }, completionHandler: { [panel] in
-            Task { @MainActor in if panel.alphaValue == 0 { panel.orderOut(nil) } }
+        }, completionHandler: { [weak self] in
+            Task { @MainActor in
+                guard let self, !self.wantsVisible else { return }
+                self.panel.orderOut(nil)
+            }
         })
+    }
+
+    private func reassert(_ reason: String) {
+        guard wantsVisible else { return }
+        position()
+        panel.orderFrontRegardless()
+        panel.alphaValue = 1
+        scheduleCheck(reason: reason)
+    }
+
+    /// Shortly after showing, confirm the window server actually has the pill on screen;
+    /// if not, log why and show it again.
+    private func scheduleCheck(reason: String = "show", retry: Bool = true) {
+        checkWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.wantsVisible else { return }
+            let info = (CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(self.panel.windowNumber))
+                as? [[String: Any]])?.first
+            let onScreen = info?[kCGWindowIsOnscreen as String] as? Bool ?? false
+            guard !onScreen || !self.panel.isOnActiveSpace else { return }
+            let app = NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
+            Log.info("overlay: not on screen after \(reason) (cgOnscreen \(onScreen), activeSpace \(self.panel.isOnActiveSpace), frontmost \(app), frame \(self.panel.frame)); re-showing")
+            self.position()
+            self.panel.orderFrontRegardless()
+            self.panel.alphaValue = 1
+            if retry { self.scheduleCheck(reason: "retry", retry: false) }
+        }
+        checkWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
     }
 
     /// Bottom-center of the screen the user is typing on, just above the Dock.
     private func position() {
-        let screen = Self.frontmostWindowScreen() ?? Self.mouseScreen() ?? NSScreen.main
+        let found = Self.frontmostWindowScreen()
+        if found == nil {
+            Log.info("overlay: no window found for \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"); using mouse screen")
+        }
+        let screen = found ?? Self.mouseScreen() ?? NSScreen.main
         guard let visible = screen?.visibleFrame else { return }
         let size = panel.frame.size
         panel.setFrameOrigin(NSPoint(x: visible.midX - size.width / 2, y: visible.minY + 28))
