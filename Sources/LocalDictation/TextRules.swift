@@ -55,14 +55,56 @@ final class TextRules {
 
     // MARK: - Fillers
 
-    /// Removes filler words; used before the model and as the fallback when it is unavailable.
-    static func stripFillers(_ text: String) -> String {
+    /// Removes filler words, before the model (which was trained on mostly filler-free input
+    /// and lets them through), after it, and as the fallback when it is unavailable.
+    /// Text that continues an earlier segment keeps its case.
+    static func stripFillers(_ text: String, capitalize: Bool = true) -> String {
         let range = NSRange(text.startIndex..., in: text)
         var out = fillers.stringByReplacingMatches(in: text, range: range, withTemplate: "")
         out = out.replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
         out = out.trimmingCharacters(in: .whitespaces)
-        if let first = out.first, first.isLowercase { out = first.uppercased() + out.dropFirst() }
+        if capitalize, let first = out.first, first.isLowercase { out = first.uppercased() + out.dropFirst() }
         return out
+    }
+
+    // MARK: - Segments
+
+    /// Speech is transcribed in segments cut at pauses, and the recognizer ends each one with a
+    /// period and capitalizes the next. Whether a segment likely continues the sentence: it
+    /// starts with an ordinary lowercase word, not "I" or a name. Main thread only.
+    static func continuesSentence(_ segment: String) -> Bool {
+        guard let first = segment.split(separator: " ").first.map(String.init) else { return false }
+        let word = first.trimmingCharacters(in: .punctuationCharacters)
+        guard let initial = word.first else { return false }
+        if initial.isLowercase { return true }
+        return word != "I" && !word.hasPrefix("I'") && word.dropFirst().allSatisfy { !$0.isUppercase } && isCommonWord(word)
+    }
+
+    /// Joins raw segments for the cleanup model, undoing the cut's period and capital where a
+    /// segment continues the sentence, so the model decides the boundary itself.
+    static func joinSegments(_ segments: [(text: String, continues: Bool)]) -> String {
+        segments.reduce("") { out, segment in
+            guard !out.isEmpty else { return segment.text }
+            guard segment.continues, out.hasSuffix(".") else { return out + " " + segment.text }
+            return String(out.dropLast()) + " " + segment.text.prefix(1).lowercased() + segment.text.dropFirst()
+        }
+    }
+
+    /// The earlier output with its final sentence punctuation removed, which the cleanup model
+    /// then continues and re-punctuates.
+    static func openEnded(_ text: String) -> String {
+        text.last.map { ".?!".contains($0) } == true ? String(text.dropLast()) : text
+    }
+
+    /// Attaches a continuation from the cleanup model: leading punctuation ends `previous`
+    /// (now open-ended), the rest is the new segment's text.
+    static func splice(previous: String, continuation: String) -> (previous: String, next: String) {
+        var prev = openEnded(previous), next = Substring(continuation)
+        if let mark = next.first, ".?!,;:".contains(mark) {
+            prev.append(mark)
+            next = next.dropFirst()
+        }
+        return (prev, next.trimmingCharacters(in: .whitespaces))
     }
 
     // MARK: - Context

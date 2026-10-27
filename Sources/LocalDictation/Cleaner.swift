@@ -33,16 +33,22 @@ final class Cleaner {
             self.context = context
             self.vocab = llama_model_get_vocab(model)
             self.sampler = sampler
-            _ = generate("Okay um so this is a warm up.")
+            _ = generate("Okay um so this is a warm up.", newWords: 8)
             Log.info("cleanup: model loaded and warmed in \(Int(nowMs() - t0)) ms")
         }
     }
 
     /// Returns cleaned text, or nil if the model is unavailable or produced something implausible.
-    func clean(_ raw: String) -> String? {
+    ///
+    /// `context` is the raw text and cleaned output of the take's earlier segments. The model
+    /// sees them as a dictation it is partway through cleaning and only writes the rest, so it
+    /// punctuates the boundary and drops fillers as if it had the whole take. The result may
+    /// then start with punctuation that ends the earlier output (see `TextRules.splice`).
+    func clean(_ raw: String, after context: (raw: String, output: String)? = nil) -> String? {
         queue.sync {
-            guard context != nil else { return nil }
-            let out = generate(raw)
+            guard self.context != nil else { return nil }
+            let out = context.map { generate("\($0.raw) \(raw)", continuing: $0.output, newWords: raw.split(separator: " ").count) }
+                ?? generate(raw, newWords: raw.split(separator: " ").count)
             let inWords = raw.split(separator: " ").count
             let outWords = out.split(separator: " ").count
             // Guard against dropped or invented content.
@@ -54,14 +60,14 @@ final class Cleaner {
         }
     }
 
-    private func generate(_ raw: String) -> String {
+    private func generate(_ raw: String, continuing prefix: String = "", newWords: Int) -> String {
         guard let context, let vocab, let sampler else { return "" }
         llama_memory_clear(llama_get_memory(context), true)
         llama_sampler_reset(sampler)
 
-        let prompt = "### Input:\n\(raw)\n\n### Output:\n"
+        let prompt = "### Input:\n\(raw)\n\n### Output:\n\(prefix)"
         var tokens = tokenize(prompt)
-        let maxNew = Int(Double(raw.split(separator: " ").count) * 2.5) + 32
+        let maxNew = Int(Double(newWords) * 2.5) + 32
         var output = ""
         var pieceBytes: [UInt8] = []
 
@@ -83,6 +89,9 @@ final class Cleaner {
                 break
             }
             if llama_decode(context, llama_batch_get_one(&token, 1)) != 0 { break }
+        }
+        if !prefix.isEmpty {
+            output = output.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         }
         return output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
