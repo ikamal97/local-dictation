@@ -20,13 +20,24 @@ final class Dictation {
     /// True when the microphone delivered nothing during the take.
     private(set) var noAudio = false
     private var committed: Int
-    private var pipeline: Task<[String], Never>?
+    private var pipeline: Task<[Segment], Never>?
     private var segmentTimer: Timer?
     private var segmentCount = 0
 
     private let frame = 480                 // 30 ms at 16 kHz
     private let minSegmentSeconds = 4.0
     private let pauseFrames = 20            // 600 ms of quiet ends a segment
+    /// Earlier segments the cleanup model sees when cleaning the next one.
+    private static let contextSegments = 2
+
+    private struct Segment {
+        /// Recognized text with fillers removed.
+        var raw: String
+        /// Whether `raw` continues the previous segment's sentence.
+        var continues: Bool
+        /// Cleaned text.
+        var text: String
+    }
 
     init(audio: AudioCapture, transcriber: Transcriber, cleaner: Cleaner, rules: TextRules, cleanupEnabled: Bool) {
         self.audio = audio
@@ -63,7 +74,7 @@ final class Dictation {
         enqueue(from: committed, to: end)
         audio.endTake()
         let parts = await pipeline?.value ?? []
-        return parts.filter { !$0.isEmpty }.joined(separator: " ")
+        return rules.applyDictionary(parts.map(\.text).filter { !$0.isEmpty }.joined(separator: " "))
     }
 
     private static func loudestFrame(_ samples: [Float], frame: Int) -> Float {
@@ -113,20 +124,37 @@ final class Dictation {
         let previous = pipeline
         let index = segmentCount
         segmentCount += 1
-        let (transcriber, cleaner, rules, cleanupEnabled) = (self.transcriber, self.cleaner, self.rules, self.cleanupEnabled)
+        let (transcriber, cleaner, cleanupEnabled) = (self.transcriber, self.cleaner, self.cleanupEnabled)
         pipeline = Task.detached(priority: .userInitiated) {
             var parts = await previous?.value ?? []
             let t0 = nowMs()
-            guard let raw = try? await transcriber.transcribe(samples), !raw.isEmpty else { return parts }
+            guard let asr = try? await transcriber.transcribe(samples), !asr.isEmpty else { return parts }
             let t1 = nowMs()
-            let stripped = TextRules.stripFillers(raw)
-            var text = stripped
-            if cleanupEnabled, !stripped.isEmpty, let cleaned = cleaner.clean(raw) {
-                text = cleaned
+            let first = !parts.contains { !$0.text.isEmpty }
+            let raw = TextRules.stripFillers(asr, capitalize: first)
+            guard !raw.isEmpty else { return parts }
+            let continues = first ? false : await MainActor.run { TextRules.continuesSentence(raw) }
+            var segment = Segment(raw: raw, continues: continues, text: raw)
+
+            if cleanupEnabled {
+                // Clean as a continuation of the last few segments, so the boundary is
+                // punctuated and fillers are dropped as if the model saw the whole take.
+                let earlier = parts.indices.filter { !parts[$0].text.isEmpty }.suffix(Self.contextSegments)
+                let joined = TextRules.joinSegments(earlier.map { (parts[$0].raw, parts[$0].continues) } + [(raw, continues)])
+                if let last = earlier.last {
+                    let output = TextRules.openEnded(earlier.map { parts[$0].text }.joined(separator: " "))
+                    // Joining only changes the new segment's first letter, so it keeps its length.
+                    let input = String(joined.dropLast(raw.count + 1))
+                    if let cleaned = cleaner.clean(String(joined.suffix(raw.count)), after: (input, output)) {
+                        (parts[last].text, segment.text) = TextRules.splice(previous: parts[last].text, continuation: cleaned)
+                    }
+                } else if let cleaned = cleaner.clean(raw) {
+                    segment.text = cleaned
+                }
+                segment.text = TextRules.stripFillers(segment.text, capitalize: first)
             }
-            text = rules.applyDictionary(text)
             Log.info("segment \(index): \(String(format: "%.1f", Double(samples.count) / 16_000)) s audio, asr \(Int(t1 - t0)) ms, cleanup \(Int(nowMs() - t1)) ms")
-            parts.append(text)
+            parts.append(segment)
             return parts
         }
     }

@@ -60,4 +60,28 @@ struct TextRulesTests {
     @Test func appliesReplacements() {
         #expect(rules.applyDictionary("Parse the jason file") == "Parse the JSON file")
     }
+
+    @Test func stripsFillersKeepingCaseForContinuations() {
+        #expect(TextRules.stripFillers("um so we ship it") == "So we ship it")
+        #expect(TextRules.stripFillers("uh, and then we ship it.", capitalize: false) == "and then we ship it.")
+    }
+
+    @Test func detectsSegmentsThatContinueASentence() {
+        #expect(TextRules.continuesSentence("The launch document."))
+        #expect(TextRules.continuesSentence("and then."))
+        #expect(!TextRules.continuesSentence("I think so."))
+        #expect(!TextRules.continuesSentence("Anneliese said so."))
+        #expect(!TextRules.continuesSentence("API keys."))
+    }
+
+    @Test func joinsSegmentsAcrossACut() {
+        let joined = TextRules.joinSegments([("As long as it matches.", false), ("What he said.", true), ("I agree.", false)])
+        #expect(joined == "As long as it matches what he said. I agree.")
+    }
+
+    @Test func splicesAContinuation() {
+        #expect(TextRules.splice(previous: "As long as it matches.", continuation: " what he said.") == ("As long as it matches", "what he said."))
+        #expect(TextRules.splice(previous: "Is it ready.", continuation: "? Then ship it.") == ("Is it ready?", "Then ship it."))
+        #expect(TextRules.splice(previous: "We tested it", continuation: ", and it works.") == ("We tested it,", "and it works."))
+    }
 }
