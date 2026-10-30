@@ -9,6 +9,7 @@ final class Dictation {
     private let cleaner: Cleaner
     private let rules: TextRules
     private let cleanupEnabled: Bool
+    private let keepAudio: Bool
 
     private let startIndex: Int
     /// End of the pre-roll; audio past this index was recorded during the take.
@@ -19,6 +20,9 @@ final class Dictation {
     private(set) var audioSeconds = 0.0
     /// True when the microphone delivered nothing during the take.
     private(set) var noAudio = false
+    /// The take's audio and per-segment results, kept when `keepAudio` is set.
+    private(set) var takeAudio: [Float] = []
+    private(set) var segments: [TakeRecord.Segment] = []
     private var committed: Int
     private var pipeline: Task<[Segment], Never>?
     private var segmentTimer: Timer?
@@ -31,20 +35,27 @@ final class Dictation {
     private static let contextSegments = 2
 
     private struct Segment {
+        /// Recognized text, as the speech model returned it.
+        var asr: String
         /// Recognized text with fillers removed.
         var raw: String
         /// Whether `raw` continues the previous segment's sentence.
         var continues: Bool
         /// Cleaned text.
         var text: String
+        /// Sample range within the take.
+        var range: Range<Int>
+        var asrMs = 0
+        var cleanupMs = 0
     }
 
-    init(audio: AudioCapture, transcriber: Transcriber, cleaner: Cleaner, rules: TextRules, cleanupEnabled: Bool) {
+    init(audio: AudioCapture, transcriber: Transcriber, cleaner: Cleaner, rules: TextRules, cleanupEnabled: Bool, keepAudio: Bool = false) {
         self.audio = audio
         self.transcriber = transcriber
         self.cleaner = cleaner
         self.rules = rules
         self.cleanupEnabled = cleanupEnabled
+        self.keepAudio = keepAudio
         startIndex = audio.beginTake()
         liveIndex = audio.currentIndex
         committed = startIndex
@@ -72,8 +83,13 @@ final class Dictation {
             return ""
         }
         enqueue(from: committed, to: end)
+        if keepAudio { takeAudio = audio.slice(from: startIndex, to: end) }
         audio.endTake()
         let parts = await pipeline?.value ?? []
+        segments = parts.map {
+            .init(start: $0.range.lowerBound, end: $0.range.upperBound, asr: $0.asr, text: $0.text,
+                  asrMs: $0.asrMs, cleanupMs: $0.cleanupMs)
+        }
         return rules.applyDictionary(parts.map(\.text).filter { !$0.isEmpty }.joined(separator: " "))
     }
 
@@ -122,6 +138,7 @@ final class Dictation {
             return
         }
         let previous = pipeline
+        let range = (from - startIndex)..<(to - startIndex)
         let index = segmentCount
         segmentCount += 1
         let (transcriber, cleaner, cleanupEnabled) = (self.transcriber, self.cleaner, self.cleanupEnabled)
@@ -132,9 +149,13 @@ final class Dictation {
             let t1 = nowMs()
             let first = !parts.contains { !$0.text.isEmpty }
             let raw = TextRules.stripFillers(asr, capitalize: first)
-            guard !raw.isEmpty else { return parts }
+            // Kept with empty text so a saved take still shows what the model heard.
+            guard !raw.isEmpty else {
+                parts.append(Segment(asr: asr, raw: "", continues: false, text: "", range: range, asrMs: Int(t1 - t0)))
+                return parts
+            }
             let continues = first ? false : await MainActor.run { TextRules.continuesSentence(raw) }
-            var segment = Segment(raw: raw, continues: continues, text: raw)
+            var segment = Segment(asr: asr, raw: raw, continues: continues, text: raw, range: range, asrMs: Int(t1 - t0))
 
             if cleanupEnabled {
                 // Clean as a continuation of the last few segments, so the boundary is
@@ -153,7 +174,8 @@ final class Dictation {
                 }
                 segment.text = TextRules.stripFillers(segment.text, capitalize: first)
             }
-            Log.info("segment \(index): \(String(format: "%.1f", Double(samples.count) / 16_000)) s audio, asr \(Int(t1 - t0)) ms, cleanup \(Int(nowMs() - t1)) ms")
+            segment.cleanupMs = Int(nowMs() - t1)
+            Log.info("segment \(index): \(String(format: "%.1f", Double(samples.count) / 16_000)) s audio, asr \(segment.asrMs) ms, cleanup \(segment.cleanupMs) ms")
             parts.append(segment)
             return parts
         }

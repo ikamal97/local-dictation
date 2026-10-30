@@ -17,6 +17,8 @@ struct HistoryEntry: Identifiable, Hashable {
 @MainActor
 final class HistoryStore: ObservableObject {
     @Published private(set) var entries: [HistoryEntry] = []
+    /// Saved take audio, named by history id and deleted along with its entry.
+    let recordings = RecordingStore()
 
     private var db: OpaquePointer?
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
@@ -40,22 +42,28 @@ final class HistoryStore: ObservableObject {
             CREATE INDEX IF NOT EXISTS dictations_time ON dictations(timestamp DESC);
             """)
         reload()
+        recordings.prune()
     }
 
     // MARK: - Writing
 
-    func add(text: String, appName: String?, audioSeconds: Double, latencyMs: Int) {
-        insert(date: Date(), text: text, appName: appName, audioSeconds: audioSeconds, latencyMs: latencyMs, source: .local)
+    /// Returns the new entry's id.
+    @discardableResult
+    func add(text: String, appName: String?, audioSeconds: Double, latencyMs: Int) -> Int64? {
+        let id = insert(date: Date(), text: text, appName: appName, audioSeconds: audioSeconds, latencyMs: latencyMs, source: .local)
         reload()
+        return id
     }
 
     func delete(_ entry: HistoryEntry) {
         exec("DELETE FROM dictations WHERE id = \(entry.id)")
+        recordings.delete(id: entry.id)
         reload()
     }
 
     func clear() {
         exec("DELETE FROM dictations")
+        recordings.deleteAll()
         reload()
     }
 
@@ -126,10 +134,11 @@ final class HistoryStore: ObservableObject {
 
     // MARK: - SQLite helpers
 
-    private func insert(date: Date, text: String, appName: String?, audioSeconds: Double, latencyMs: Int?, source: HistoryEntry.Source) {
+    @discardableResult
+    private func insert(date: Date, text: String, appName: String?, audioSeconds: Double, latencyMs: Int?, source: HistoryEntry.Source) -> Int64? {
         var stmt: OpaquePointer?
         let sql = "INSERT INTO dictations (timestamp, text, app_name, words, audio_seconds, latency_ms, source) VALUES (?, ?, ?, ?, ?, ?, ?)"
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_double(stmt, 1, date.timeIntervalSince1970)
         sqlite3_bind_text(stmt, 2, text, -1, Self.transient)
@@ -138,7 +147,7 @@ final class HistoryStore: ObservableObject {
         sqlite3_bind_double(stmt, 5, audioSeconds)
         if let latencyMs { sqlite3_bind_int(stmt, 6, Int32(latencyMs)) } else { sqlite3_bind_null(stmt, 6) }
         sqlite3_bind_text(stmt, 7, source.rawValue, -1, Self.transient)
-        sqlite3_step(stmt)
+        return sqlite3_step(stmt) == SQLITE_DONE ? sqlite3_last_insert_rowid(db) : nil
     }
 
     private func exec(_ sql: String) {

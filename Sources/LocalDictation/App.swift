@@ -92,7 +92,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard model.isReady, current == nil else { return }
             keyDownAt = nowMs()
             corrections.stop()
-            let dictation = Dictation(audio: audio, transcriber: transcriber, cleaner: cleaner, rules: rules, cleanupEnabled: model.cleanupEnabled)
+            let dictation = Dictation(audio: audio, transcriber: transcriber, cleaner: cleaner, rules: rules,
+                                      cleanupEnabled: model.cleanupEnabled, keepAudio: model.saveHistory && model.saveAudio)
             current = dictation
             rules.reloadIfChanged()
             DispatchQueue.global(qos: .userInitiated).async {
@@ -141,9 +142,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if self.model.learnCorrections { self.corrections.watch(text) }
                     self.remember(transcript)
                     if self.model.saveHistory {
-                        self.model.history.add(
-                            text: transcript, appName: HistoryStore.appName(forBundleID: dictation.context.bundleID),
-                            audioSeconds: dictation.audioSeconds, latencyMs: latency)
+                        let appName = HistoryStore.appName(forBundleID: dictation.context.bundleID)
+                        let id = self.model.history.add(
+                            text: transcript, appName: appName, audioSeconds: dictation.audioSeconds, latencyMs: latency)
+                        if let id, !dictation.takeAudio.isEmpty {
+                            let record = TakeRecord(
+                                id: id, date: Date(), sampleRate: Int(AudioCapture.sampleRate), audioSeconds: dictation.audioSeconds,
+                                cleanupEnabled: self.model.cleanupEnabled, segments: dictation.segments, finalText: transcript,
+                                pastedText: text, appName: appName, latencyMs: latency)
+                            self.model.history.recordings.save(record, samples: dictation.takeAudio)
+                        }
                     }
                 }
                 self.setIcon(.idle)
