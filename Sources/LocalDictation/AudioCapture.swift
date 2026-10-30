@@ -106,7 +106,26 @@ final class AudioCapture {
             Log.info("audio: preferred mic not found, using system default input")
         }
 
+        // Pinning a device doesn't update the node's client-side format: with AirPods
+        // (24 kHz) as the system default and the built-in mic (48 kHz) pinned, the
+        // output still reports 24 kHz and installTap raises a format-mismatch exception.
+        // Match the client rate to the pinned hardware before tapping.
+        let hwFormat = input.inputFormat(forBus: 0)
+        if let unit = input.audioUnit, hwFormat.sampleRate > 0,
+           input.outputFormat(forBus: 0).sampleRate != hwFormat.sampleRate {
+            var client = input.outputFormat(forBus: 0).streamDescription.pointee
+            client.mSampleRate = hwFormat.sampleRate
+            let status = AudioUnitSetProperty(
+                unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 1,
+                &client, UInt32(MemoryLayout<AudioStreamBasicDescription>.size))
+            Log.info("audio: client format synced to \(hwFormat.sampleRate) Hz (status \(status))")
+        }
+
         let inFormat = input.outputFormat(forBus: 0)
+        guard inFormat.sampleRate == hwFormat.sampleRate, inFormat.sampleRate > 0, inFormat.channelCount > 0 else {
+            throw NSError(domain: "AudioCapture", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "input format \(inFormat) doesn't match hardware \(hwFormat)"])
+        }
         converter = AVAudioConverter(from: inFormat, to: outFormat)
         input.installTap(onBus: 0, bufferSize: 1024, format: inFormat) { [weak self] buffer, _ in
             self?.consume(buffer)
